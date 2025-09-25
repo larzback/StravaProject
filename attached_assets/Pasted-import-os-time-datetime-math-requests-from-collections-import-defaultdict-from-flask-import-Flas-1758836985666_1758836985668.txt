@@ -118,7 +118,7 @@ def home():
           <form action="/connect" method="get" style="margin-top:16px">
             <button class="btn" type="submit">🚴 Se connecter avec Strava</button>
           </form>
-          <div class="note">✓ Auth en session locale, rien n'est stocké côté serveur</div>
+          <div class="note">✓ Auth en session locale, rien n’est stocké côté serveur</div>
         </div>
         """ + html_foot()
 
@@ -150,9 +150,8 @@ def connect():
         "approval_prompt": "auto",
         "scope": scope
     }
-    r = requests.Request('GET', STRAVA_AUTH_URL, params=params)
-    prepared = r.prepare()
-    return redirect(prepared.url or STRAVA_AUTH_URL)
+    q = "&".join(f"{k}={requests.utils.quote(v)}" for k, v in params.items())
+    return redirect(f"{STRAVA_AUTH_URL}?{q}")
 
 @app.route("/callback")
 def callback():
@@ -374,4 +373,4 @@ def stats_2025():
 
 # ----------------- Run -----------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=81)
