@@ -36,10 +36,8 @@ def connect():
         "approval_prompt": "auto",
         "scope": scope
     }
-    # Utilisation de requests pour construire l'URL avec les paramètres encodés
-    r = requests.Request('GET', STRAVA_AUTH_URL, params=params)
-    prepared = r.prepare()
-    return redirect(prepared.url or STRAVA_AUTH_URL)
+    q = "&".join(f"{k}={requests.utils.quote(v)}" for k, v in params.items())
+    return redirect(f"{STRAVA_AUTH_URL}?{q}")
 
 @app.route("/callback")
 def callback():
@@ -86,13 +84,4 @@ def activities():
     for act in acts:
         km = round(act.get("distance", 0)/1000, 2)
         html += f"<li>{act.get('name')} — {km} km — D+ {act.get('total_elevation_gain', 0)} m</li>"
-    html += "</ul><p><a href='/'>Retour</a></p>"
-    return html
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect(url_for("home"))
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    html += "</ul><p><a href='/
