@@ -39,6 +39,12 @@ def connect():
     # Utilisation de requests pour construire l'URL avec les paramètres encodés
     r = requests.Request('GET', STRAVA_AUTH_URL, params=params)
     prepared = r.prepare()
+    
+    # Debug : affichons les informations pour vérifier
+    print(f"CLIENT_ID: {CLIENT_ID}")
+    print(f"REDIRECT_URI: {REDIRECT_URI}")
+    print(f"URL générée: {prepared.url}")
+    
     return redirect(prepared.url or STRAVA_AUTH_URL)
 
 @app.route("/callback")
