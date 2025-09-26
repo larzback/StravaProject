@@ -14,9 +14,11 @@ STRAVA_AUTH_URL = "https://www.strava.com/oauth/authorize"
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 STRAVA_API_BASE = "https://www.strava.com/api/v3"
 
+
 # ----------------- Helpers -----------------
 def unix(dt):  # datetime -> epoch seconds
     return int(time.mktime(dt.timetuple()))
+
 
 def fmt_hms(seconds):
     seconds = int(seconds or 0)
@@ -24,8 +26,10 @@ def fmt_hms(seconds):
     m = (seconds % 3600) // 60
     return f"{h}h{m:02d}"
 
-def km(meters): 
+
+def km(meters):
     return round((meters or 0) / 1000.0, 2)
+
 
 def safe_float(x, default=0.0):
     try:
@@ -33,15 +37,22 @@ def safe_float(x, default=0.0):
     except Exception:
         return default
 
-def get_activities_between(token, start_dt, end_dt, per_page=200, max_pages=12):
+
+def get_activities_between(token,
+                           start_dt,
+                           end_dt,
+                           per_page=200,
+                           max_pages=12):
     """Récupère toutes les activités entre deux dates (UTC) en paginant."""
     headers = {"Authorization": f"Bearer {token}"}
-    after = unix(start_dt); before = unix(end_dt)
+    after = unix(start_dt)
+    before = unix(end_dt)
     all_acts = []
     page = 1
     while page <= max_pages:
-        url = (f"{STRAVA_API_BASE}/athlete/activities?"
-               f"after={after}&before={before}&per_page={per_page}&page={page}")
+        url = (
+            f"{STRAVA_API_BASE}/athlete/activities?"
+            f"after={after}&before={before}&per_page={per_page}&page={page}")
         r = requests.get(url, headers=headers, timeout=25)
         if r.status_code != 200:
             break
@@ -52,8 +63,10 @@ def get_activities_between(token, start_dt, end_dt, per_page=200, max_pages=12):
         page += 1
     return all_acts
 
+
 def strava_activity_link(act_id):
     return f"https://www.strava.com/activities/{act_id}"
+
 
 # ----------------- UI Fragments -----------------
 def html_head(title="Strava – Lara"):
@@ -99,8 +112,10 @@ th,td{{padding:8px 6px; border-bottom:1px solid var(--line); text-align:left; fo
 .small{{font-size:12px;color:var(--muted)}}
 </style></head><body><div class="wrap">"""
 
+
 def html_foot():
     return "</div></body></html>"
+
 
 # ----------------- Routes -----------------
 @app.route("/")
@@ -139,10 +154,12 @@ def home():
     </div>
     """ + html_foot()
 
+
 @app.route("/connect")
 def connect():
-    # étends les scopes pour tout récupérer (y compris activités privées)
+    # Étend les scopes pour tout récupérer (activités privées comprises)
     scope = "read,activity:read,activity:read_all"
+
     params = {
         "client_id": CLIENT_ID,
         "redirect_uri": REDIRECT_URI,
@@ -150,9 +167,20 @@ def connect():
         "approval_prompt": "auto",
         "scope": scope
     }
-    r = requests.Request('GET', STRAVA_AUTH_URL, params=params)
-    prepared = r.prepare()
-    return redirect(prepared.url or STRAVA_AUTH_URL)
+
+    # Construction de l'URL d'auth Strava
+    query_string = "&".join(f"{k}={requests.utils.quote(v)}"
+                            for k, v in params.items())
+    auth_url = f"{STRAVA_AUTH_URL}?{query_string}"
+
+    # DEBUG — impression console
+    print("🔍 DEBUG — Strava Auth")
+    print("Client ID :", CLIENT_ID)
+    print("Redirect URI :", REDIRECT_URI)
+    print("URL générée :", auth_url)
+
+    return redirect(auth_url)
+
 
 @app.route("/callback")
 def callback():
@@ -173,10 +201,12 @@ def callback():
     session["athlete"] = tok.get("athlete", {})
     return redirect(url_for("home"))
 
+
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect(url_for("home"))
+
 
 @app.route("/me")
 def me():
@@ -196,12 +226,15 @@ def me():
     </div>
     """ + html_foot()
 
+
 @app.route("/activities")
 def activities():
     if "access_token" not in session:
         return redirect(url_for("home"))
     headers = {"Authorization": f"Bearer {session['access_token']}"}
-    r = requests.get(f"{STRAVA_API_BASE}/athlete/activities?per_page=10", headers=headers, timeout=25)
+    r = requests.get(f"{STRAVA_API_BASE}/athlete/activities?per_page=10",
+                     headers=headers,
+                     timeout=25)
     if r.status_code != 200:
         return f"Erreur API /athlete/activities: {r.text}", 400
     acts = r.json()
@@ -227,6 +260,7 @@ def activities():
     </div>
     """ + html_foot()
 
+
 @app.route("/stats-2025")
 def stats_2025():
     if "access_token" not in session:
@@ -235,7 +269,7 @@ def stats_2025():
 
     # Fenêtre 2025 (UTC)
     start = datetime.datetime(2025, 1, 1)
-    end   = datetime.datetime(2026, 1, 1)
+    end = datetime.datetime(2026, 1, 1)
 
     acts = get_activities_between(token, start, end)
 
@@ -246,7 +280,12 @@ def stats_2025():
     n = len(acts)
 
     # Par type
-    by_type = defaultdict(lambda: {"dist":0.0, "elev":0.0, "time":0, "count":0})
+    by_type = defaultdict(lambda: {
+        "dist": 0.0,
+        "elev": 0.0,
+        "time": 0,
+        "count": 0
+    })
     active_days = set()
     longest = None
     biggest_elev = None
@@ -280,16 +319,21 @@ def stats_2025():
     avg_km_per_day = km(total_dist) / max(1, days_active)
 
     # Tops (distance / D+ / vitesse moyenne >= 5 km)
-    top_by_distance = sorted(acts, key=lambda x: x.get("distance") or 0, reverse=True)[:5]
-    top_by_elev = sorted(acts, key=lambda x: x.get("total_elevation_gain") or 0, reverse=True)[:5]
+    top_by_distance = sorted(acts,
+                             key=lambda x: x.get("distance") or 0,
+                             reverse=True)[:5]
+    top_by_elev = sorted(acts,
+                         key=lambda x: x.get("total_elevation_gain") or 0,
+                         reverse=True)[:5]
 
     # vitesse moyenne en km/h (>= 5 km)
     def avg_kmh(a):
         d = a.get("distance") or 0
         mt = a.get("moving_time") or 0
-        if d < 5000 or mt <= 0: 
+        if d < 5000 or mt <= 0:
             return 0.0
-        return (d/mt) * 3.6
+        return (d / mt) * 3.6
+
     top_by_speed = sorted(acts, key=lambda x: avg_kmh(x), reverse=True)[:5]
 
     # Tableaux HTML
@@ -302,7 +346,7 @@ def stats_2025():
     def rows_top(acts_list, metric):
         out = ""
         for a in acts_list:
-            name = a.get("name","(sans titre)")
+            name = a.get("name", "(sans titre)")
             link = strava_activity_link(a.get("id"))
             if metric == "distance":
                 val = f"{km(a.get('distance',0))} km"
@@ -319,7 +363,7 @@ def stats_2025():
     climb_html = "-" if not biggest_elev else f"<a class='a' target='_blank' href='{strava_activity_link(biggest_elev.get('id'))}'>{biggest_elev.get('name','(sans titre)')}</a> — {int(biggest_elev.get('total_elevation_gain',0))} m D+"
     fast_html = "-"
     if fastest_avg:
-        v_kmh = round(fastest_avg["v"]*3.6, 2)
+        v_kmh = round(fastest_avg["v"] * 3.6, 2)
         act = fastest_avg["act"]
         fast_html = f"<a class='a' target='_blank' href='{strava_activity_link(act.get('id'))}'>{act.get('name','(sans titre)')}</a> — {v_kmh} km/h (≥5 km)"
 
@@ -372,7 +416,8 @@ def stats_2025():
     """
     return html + html_foot()
 
+
 # ----------------- Run -----------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
-    #deploiement 
+    #deploiement
