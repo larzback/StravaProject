@@ -117,14 +117,15 @@ th,td{{padding:8px 6px; border-bottom:1px solid var(--line); text-align:left; fo
 .small{{font-size:12px;color:var(--muted)}}
 </style></head><body><div class="wrap">"""
 
+
 def html_foot():
     return """
       <div style="margin-top:30px;text-align:center;font-size:12px;color:#94a3b8">
-        Powered by <a class="a" href="https://www.strava.com" target="_blank">Strava</a>
+        Powered by <a class="a" href="https://www.strava.com" target="_blank">Strava</a> •
+        <a class="a" href="/privacy">Privacy Policy</a>
       </div>
     </div></body></html>
     """
-
 
 # ----------------- Routes -----------------
 @app.route("/")
@@ -139,11 +140,17 @@ def home():
           <div class="row">
             <span class="pill">Flask</span><span class="pill">Strava API</span><span class="pill">OAuth2</span>
           </div>
-          <form action="/connect" method="get" style="margin-top:16px">
-            <button class="btn" type="submit">🚴 Connect with Strava</button>
-          </form>
-          <div class="note">✓ Auth lives only in your session; nothing is stored server‑side.</div>
-        </div>
+
+          <div style="display:flex; justify-content:center; margin-top:32px">
+            <form action="/connect" method="get">
+              <button class="btn" type="submit">🚴 Connect with Strava</button>
+            </form>
+          </div>
+
+<div class="note">✓ Auth lives only in your session; nothing is stored server‑side.</div>
+<div class="links" style="margin-top:10px">
+  <a class="a" href="/privacy">Privacy Policy</a>
+</div>
         """ + html_foot()
 
     # connected: show menu (no connect button)
@@ -151,12 +158,13 @@ def home():
     <div class="card">
       <h1 class="title">Hello Lara ✨</h1>
       <p class="subtitle">You’re connected. Access your profile, recent activities and <b>2025 Stats</b>.</p>
-      <div class="links">
-        <a class="a" href="/me">Profile</a>
-        <a class="a" href="/activities">Recent activities</a>
-        <a class="a" href="/stats-2025">📊 2025 Stats</a>
-        <a class="a" href="/logout">Log out</a>
-      </div>
+<div class="links">
+  <a class="a" href="/me">Profile</a>
+  <a class="a" href="/activities">Recent activities</a>
+  <a class="a" href="/stats-2025">📊 2025 Stats</a>
+  <a class="a" href="/privacy">Privacy Policy</a>  <!-- ✅ ici -->
+  <a class="a" href="/logout">Log out</a>
+</div>
       <div class="row" style="margin-top:14px">
         <span class="pill">Connected ✅</span><span class="pill">Dashboard</span><span class="pill">2025</span>
       </div>
