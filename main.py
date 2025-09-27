@@ -84,16 +84,22 @@ body{{
              linear-gradient(160deg, var(--bg1), var(--bg2));
   padding:24px;
 }}
-.wrap{{max-width:1024px;margin:0 auto}}
+.wrap {{
+  max-width: 1024px;
+  margin: 0 auto;
+  text-align: center; /* center layout */
+}}
+.row{{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 6px;justify-content:center}}
+.links{{display:flex;gap:14px;margin-top:10px;flex-wrap:wrap;justify-content:center}}
 .card{{
   background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
   border:1px solid var(--line); border-radius:20px; padding:22px 20px;
   box-shadow:0 10px 40px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.04);
   backdrop-filter: blur(6px);
+  text-align:left; /* keep text readable inside cards */
 }}
-.title{{font-size:30px;font-weight:800;margin:0 0 8px}}
-.subtitle{{color:var(--muted);margin:0 0 18px;line-height:1.55}}
-.row{{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 6px}}
+.title{{font-size:30px;font-weight:800;margin:0 0 8px;text-align:center}}
+.subtitle{{color:var(--muted);margin:0 0 18px;line-height:1.55;text-align:center}}
 .pill{{font-size:12px;color:#e2e8f0;background:#0f172a;border:1px solid var(--line);padding:8px 12px;border-radius:999px}}
 .btn{{
   appearance:none;border:0;border-radius:12px;padding:14px 18px;font-weight:800;font-size:15px;
@@ -101,7 +107,6 @@ body{{
   box-shadow:0 8px 24px rgba(249,115,22,.35); transition:transform .05s ease, box-shadow .2s ease;
 }}
 .btn:hover{{box-shadow:0 10px 32px rgba(249,115,22,.5)}} .btn:active{{transform:translateY(1px)}}
-.links{{display:flex;gap:14px;margin-top:10px;flex-wrap:wrap}}
 .a{{color:#93c5fd;text-decoration:none;font-weight:600}} .a:hover{{text-decoration:underline}}
 .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin:18px 0}}
 .k{{font-size:26px;font-weight:800}} .l{{color:var(--muted);font-size:13px}}
@@ -111,7 +116,6 @@ th,td{{padding:8px 6px; border-bottom:1px solid var(--line); text-align:left; fo
 .note{{color:#86efac;font-weight:600;margin-top:8px}}
 .small{{font-size:12px;color:var(--muted)}}
 </style></head><body><div class="wrap">"""
-
 
 def html_foot():
     return """
