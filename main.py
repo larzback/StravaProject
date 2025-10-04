@@ -119,10 +119,6 @@ th,td{{padding:8px 6px; border-bottom:1px solid var(--line); text-align:left; fo
     0%% {{ transform: rotate(0deg); }}
     100%% {{ transform: rotate(360deg); }}
 }}
-</style></head><body><div class="wrap">"""
-
-#message for user - please be patient
-</style></head><body><div class="wrap">
 
 <div id="loading-message" style="
   display: flex;
@@ -150,6 +146,9 @@ th,td{{padding:8px 6px; border-bottom:1px solid var(--line); text-align:left; fo
   "></div>
   Processing stats... this may take a few seconds. Please don’t refresh.
 </div>
+
+</style></head><body><div class="wrap">"""
+
 
 def html_foot():
     return """
