@@ -115,10 +115,10 @@ th,td{{padding:8px 6px; border-bottom:1px solid var(--line); text-align:left; fo
 .badge{{display:inline-block;background:#0b1220;border:1px solid var(--line);padding:4px 8px;border-radius:8px;font-size:12px}}
 .note{{color:#86efac;font-weight:600;margin-top:8px}}
 .small{{font-size:12px;color:var(--muted)}}
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
+@keyframes spin {{
+    0%% {{ transform: rotate(0deg); }}
+    100%% {{ transform: rotate(360deg); }}
+}}
 </style></head><body><div class="wrap">"""
 
 #message for user - please be patient
