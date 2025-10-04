@@ -115,8 +115,41 @@ th,td{{padding:8px 6px; border-bottom:1px solid var(--line); text-align:left; fo
 .badge{{display:inline-block;background:#0b1220;border:1px solid var(--line);padding:4px 8px;border-radius:8px;font-size:12px}}
 .note{{color:#86efac;font-weight:600;margin-top:8px}}
 .small{{font-size:12px;color:var(--muted)}}
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
 </style></head><body><div class="wrap">"""
 
+#message for user - please be patient
+</style></head><body><div class="wrap">
+
+<div id="loading-message" style="
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%;
+  background: #fff3cd;
+  color: #856404;
+  padding: 10px;
+  font-family: sans-serif;
+  font-size: 16px;
+  z-index: 9999;
+  border-bottom: 1px solid #ffeeba;
+">
+  <div class="spinner" style="
+    width: 16px;
+    height: 16px;
+    border: 3px solid #f3f3f3;
+    border-top: 3px solid #856404;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  "></div>
+  Processing stats... this may take a few seconds. Please don’t refresh.
+</div>
 
 def html_foot():
     return """
