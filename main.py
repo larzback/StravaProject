@@ -116,36 +116,9 @@ th,td{{padding:8px 6px; border-bottom:1px solid var(--line); text-align:left; fo
 .note{{color:#86efac;font-weight:600;margin-top:8px}}
 .small{{font-size:12px;color:var(--muted)}}
 @keyframes spin {{
-    0%% {{ transform: rotate(0deg); }}
-    100%% {{ transform: rotate(360deg); }}
+  0% {{ transform: rotate(0deg); }}
+  100% {{ transform: rotate(360deg); }}
 }}
-
-<div id="loading-message" style="
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  position: fixed;
-  top: 0; left: 0;
-  width: 100%;
-  background: #fff3cd;
-  color: #856404;
-  padding: 10px;
-  font-family: sans-serif;
-  font-size: 16px;
-  z-index: 9999;
-  border-bottom: 1px solid #ffeeba;
-">
-  <div class="spinner" style="
-    width: 16px;
-    height: 16px;
-    border: 3px solid #f3f3f3;
-    border-top: 3px solid #856404;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-  "></div>
-  Processing stats... this may take a few seconds. Please don’t refresh.
-</div>
 
 </style></head><body><div class="wrap">"""
 
@@ -327,8 +300,9 @@ def activities():
     """ + html_foot()
 
 
-@app.route("/stats-2025")
-def stats_2025():
+
+@app.route("/stats-2025/data")
+def stats_2025_data():
     if "access_token" not in session:
         return redirect(url_for("home"))
     token = session["access_token"]
@@ -433,7 +407,8 @@ def stats_2025():
         fast_html = f"<a class='a' target='_blank' href='{strava_activity_link(act.get('id'))}'>{act.get('name','(untitled)')}</a> — {v_kmh} km/h (≥5 km)"
 
     # Render
-    html = html_head("2025 Stats – Lara") + f"""
+    # Render (return ONLY the inner content for injection)
+    body_html = f"""
     <div class="card">
       <h1 class="title">📊 2025 Stats</h1>
       <p class="subtitle">Period: 01.01.2025 → 31.12.2025</p>
@@ -444,7 +419,7 @@ def stats_2025():
         <div class="card"><div class="k">{fmt_hms(total_time)}</div><div class="l">Moving time</div></div>
         <div class="card"><div class="k">{n}</div><div class="l">Activities</div></div>
         <div class="card"><div class="k">{days_active}</div><div class="l">Active days</div></div>
-        <div class="card"><div class="k">{round(avg_km_per_day,2)}</div><div class="l">Avg km / active day</div></div>
+        <div class="card"><div class="k">{round(avg_km_per_day, 2)}</div><div class="l">Avg km / active day</div></div>
       </div>
 
       <div class="grid">
@@ -479,7 +454,43 @@ def stats_2025():
       <div class="links" style="margin-top:10px"><a class="a" href="/">← Back</a></div>
     </div>
     """
-    return html + html_foot()
+
+    return body_html
+
+@app.route("/stats-2025")
+def stats_2025_shell():
+    if "access_token" not in session:
+        return redirect(url_for("home"))
+
+    return html_head("2025 Stats – Lara") + """
+<div id="loading-message" style="
+  position: fixed; top: 0; left: 0; width: 100%%;
+  background: #fff3cd; color: #856404;
+  padding: 10px; text-align: center; z-index: 9999;
+  border-bottom: 1px solid #ffeeba;
+">
+  ⏳ Processing stats… this may take a few seconds. Please don’t refresh.
+</div>
+
+<div id="content" style="margin-top: 52px;">Preparing…</div>
+
+<script>
+  fetch('/stats-2025/data', { credentials: 'same-origin' })
+    .then(response => {
+      if (!response.ok) throw new Error(response.status);
+      return response.text();
+    })
+    .then(html => {
+      document.getElementById('content').innerHTML = html;
+      document.getElementById('loading-message').style.display = 'none';
+    })
+    .catch(error => {
+      document.getElementById('content').innerHTML = 'Error loading stats.';
+      console.error(error);
+    });
+</script>
+""" + html_foot()
+
 
 
 # ----------------- Run (optional for local dev) -----------------
