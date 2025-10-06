@@ -1,4 +1,5 @@
 import os, time, datetime, math, requests
+import json, base64
 from collections import defaultdict
 from flask import Flask, request, redirect, session, url_for
 # --- Added for Strava webhook patch ---
