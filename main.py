@@ -625,9 +625,11 @@ def fetch_streams(access_token, activity_id, types=None):
     return r.json()
 
 def save_streams_csv(athlete_id, activity_id, streams_json):
+    # Align streams by index
     keys = [k for k, v in streams_json.items() if isinstance(v, dict) and "data" in v]
     if not keys:
         raise RuntimeError("No stream data returned — check activity privacy/scopes.")
+
     max_len = max(len(streams_json[k]["data"]) for k in keys)
     rows = []
     for i in range(max_len):
@@ -636,11 +638,25 @@ def save_streams_csv(athlete_id, activity_id, streams_json):
             data = streams_json[k]["data"]
             row[k] = data[i] if i < len(data) else ""
         rows.append(row)
+
+    # Save locally
+    os.makedirs(DATA_DIR, exist_ok=True)
     out_path = os.path.join(DATA_DIR, f"{athlete_id}_{activity_id}.csv")
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=rows[0].keys())
         writer.writeheader()
         writer.writerows(rows)
+
+    # Upload to Google Drive if configured (still inside the function!)
+    try:
+        if 'upload_to_drive' in globals() and callable(upload_to_drive) and DRIVE_FOLDER_ID:
+            fname = os.path.basename(out_path)
+            drive_info = upload_to_drive(out_path, fname, "text/csv", DRIVE_FOLDER_ID)
+            if isinstance(drive_info, dict):
+                print(f"📤 Uploaded to Drive: {drive_info.get('webViewLink') or drive_info.get('id')}")
+    except Exception as _e:
+        print("Drive upload skipped/error:", _e)
+
     return out_path
 
 # Upload to Google Drive if configured
