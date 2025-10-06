@@ -659,14 +659,7 @@ def save_streams_csv(athlete_id, activity_id, streams_json):
 
     return out_path
 
-# Upload to Google Drive if configured
-try:
-    fname = os.path.basename(out_path)
-    drive_info = upload_to_drive(out_path, fname, "text/csv", DRIVE_FOLDER_ID)
-    if drive_info and isinstance(drive_info, dict):
-        print(f"📤 Uploaded to Drive: {drive_info.get('webViewLink') or drive_info.get('id')}")
-except Exception as _e:
-    print("Drive upload skipped/error:", _e)
+
 
 
 # === Strava Webhook endpoints ===
