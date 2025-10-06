@@ -1,6 +1,19 @@
 import os, time, datetime, math, requests
 from collections import defaultdict
 from flask import Flask, request, redirect, session, url_for
+# --- Added for Strava webhook patch ---
+import sqlite3
+import csv
+import time
+from urllib.parse import urlencode
+# --- Google Drive integration imports ---
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload
+except Exception as _drive_import_err:
+    # Libs might not be installed yet on Render. We'll handle at runtime.
+    pass
 
 # ----------------- App & Config -----------------
 app = Flask(__name__)
@@ -236,6 +249,11 @@ def callback():
     if r.status_code != 200:
         return f"Error while exchanging token: {r.text}", 400
     tok = r.json()
+    try:
+        save_user_token(tok.get("athlete", {}), tok)
+    except Exception as _e:
+        print("save_user_token warning:", _e)
+
     session["access_token"] = tok["access_token"]
     session["athlete"] = tok.get("athlete", {})
     return redirect(url_for("home"))
@@ -498,3 +516,360 @@ if __name__ == "__main__":
     # For local runs (e.g., Replit). On Render, gunicorn (Procfile) is used instead.
     app.run(host="0.0.0.0", port=5000)
     # deployment
+
+# --- Added env for webhook patch ---
+STRAVA_VERIFY_TOKEN = os.environ.get("STRAVA_VERIFY_TOKEN", "dev-verify-token")
+BASE_URL = os.environ.get("BASE_URL")  # optional; inferred if absent
+DB_PATH = os.environ.get("DB_PATH", "strava.db")
+DATA_DIR = os.environ.get("DATA_DIR", "data")
+if not os.path.isdir(DATA_DIR):
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+# === SQLite helpers for multi-user tokens ===
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                athlete_id INTEGER PRIMARY KEY,
+                firstname TEXT,
+                lastname TEXT,
+                access_token TEXT,
+                refresh_token TEXT,
+                expires_at INTEGER
+            );
+            """
+        )
+        conn.commit()
+
+# Initialize DB table if not exists
+try:
+    init_db()
+except Exception as e:
+    print("DB init warning:", e)
+
+def save_user_token(athlete_dict, token_dict):
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO users (athlete_id, firstname, lastname, access_token, refresh_token, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(athlete_id) DO UPDATE SET
+                firstname=excluded.firstname,
+                lastname=excluded.lastname,
+                access_token=excluded.access_token,
+                refresh_token=excluded.refresh_token,
+                expires_at=excluded.expires_at
+            """,
+            (
+                athlete_dict.get("id"),
+                athlete_dict.get("firstname"),
+                athlete_dict.get("lastname"),
+                token_dict.get("access_token"),
+                token_dict.get("refresh_token"),
+                token_dict.get("expires_at"),
+            ),
+        )
+        conn.commit()
+
+def get_user(athlete_id: int):
+    with get_db() as conn:
+        cur = conn.execute("SELECT * FROM users WHERE athlete_id=?", (athlete_id,))
+        return cur.fetchone()
+
+def refresh_if_needed(row):
+    """Return a valid access_token for this athlete row, refreshing if needed."""
+    if not row:
+        return None
+    now = int(time.time())
+    exp = int(row["expires_at"]) if row["expires_at"] else 0
+    if exp - 120 > now:
+        return row["access_token"]
+    # refresh
+    payload = {
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "grant_type": "refresh_token",
+        "refresh_token": row["refresh_token"],
+    }
+    r = requests.post(STRAVA_TOKEN_URL, data=payload, timeout=20)
+    r.raise_for_status()
+    data = r.json()
+    save_user_token({"id": row["athlete_id"]}, data)
+    return data["access_token"]
+
+# === Helpers: base URL and Strava streams ===
+def get_base_url():
+    if BASE_URL:
+        return BASE_URL.rstrip("/")
+    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+    return f"{scheme}://{request.host}"
+
+def fetch_streams(access_token, activity_id, types=None):
+    if types is None:
+        types = [
+            "time", "distance", "altitude", "velocity_smooth",
+            "watts", "heartrate", "cadence", "grade_smooth", "temp"
+        ]
+    url = f"{STRAVA_API_BASE}/activities/{activity_id}/streams"
+    params = {"keys": ",".join(types), "key_by_type": "true"}
+    headers = {"Authorization": f"Bearer {access_token}"}
+    r = requests.get(url, headers=headers, params=params, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+def save_streams_csv(athlete_id, activity_id, streams_json):
+    keys = [k for k, v in streams_json.items() if isinstance(v, dict) and "data" in v]
+    if not keys:
+        raise RuntimeError("No stream data returned — check activity privacy/scopes.")
+    max_len = max(len(streams_json[k]["data"]) for k in keys)
+    rows = []
+    for i in range(max_len):
+        row = {"idx": i}
+        for k in keys:
+            data = streams_json[k]["data"]
+            row[k] = data[i] if i < len(data) else ""
+        rows.append(row)
+    out_path = os.path.join(DATA_DIR, f"{athlete_id}_{activity_id}.csv")
+    with open(out_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+    return out_path
+
+# Upload to Google Drive if configured
+try:
+    fname = os.path.basename(out_path)
+    drive_info = upload_to_drive(out_path, fname, "text/csv", DRIVE_FOLDER_ID)
+    if drive_info and isinstance(drive_info, dict):
+        print(f"📤 Uploaded to Drive: {drive_info.get('webViewLink') or drive_info.get('id')}")
+except Exception as _e:
+    print("Drive upload skipped/error:", _e)
+
+
+# === Strava Webhook endpoints ===
+@app.route("/webhook", methods=["GET", "POST"])
+def webhook():
+    if request.method == "GET":
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+        if mode == "subscribe" and token == STRAVA_VERIFY_TOKEN:
+            return jsonify({"hub.challenge": challenge})
+        return jsonify({"error": "Verification failed"}), 403
+
+    try:
+        event = request.get_json(force=True)
+    except Exception:
+        return jsonify({"ok": False, "error": "invalid json"}), 400
+
+    if not event or event.get("object_type") != "activity":
+        return jsonify({"ok": True})
+
+    aspect = event.get("aspect_type")
+    owner_id = event.get("owner_id")
+    activity_id = event.get("object_id")
+
+    if aspect == "create" and owner_id and activity_id:
+        row = get_user(owner_id)
+        token = refresh_if_needed(row)
+        if token:
+            try:
+                streams = fetch_streams(token, activity_id)
+                out_path = save_streams_csv(owner_id, activity_id, streams)
+                print(f"✅ Saved streams → {out_path}")
+            except Exception as e:
+                print("⚠️ fetch/save error:", e)
+        else:
+            print("⚠️ No token stored for owner_id:", owner_id)
+    return jsonify({"ok": True})
+
+@app.route("/admin/create_subscription")
+def create_subscription():
+    base = get_base_url()
+    payload = {
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "callback_url": f"{base}/webhook",
+        "verify_token": STRAVA_VERIFY_TOKEN,
+    }
+    r = requests.post(f"{STRAVA_API_BASE}/push_subscriptions", data=payload, timeout=20)
+    try:
+        return r.json()
+    except Exception:
+        return {"status": r.status_code, "text": r.text[:2000]}
+
+# --- Google Drive ENV ---
+# If you *don't* have a Persistent Disk, enable Drive uploads:
+# Set GOOGLE_SERVICE_ACCOUNT_JSON (raw JSON or base64) and DRIVE_FOLDER_ID
+GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID")  # target folder ID
+
+
+# === Google Drive helpers ===
+_drive_service_cache = None
+
+def _parse_sa_json(sa_str):
+    if not sa_str:
+        return None
+    sa_str = sa_str.strip()
+    if sa_str.startswith("{"):
+        return json.loads(sa_str)
+    # assume base64-encoded
+    try:
+        decoded = base64.b64decode(sa_str).decode("utf-8")
+        return json.loads(decoded)
+    except Exception:
+        return None
+
+def get_drive_service():
+    global _drive_service_cache
+    if _drive_service_cache is not None:
+        return _drive_service_cache
+    try:
+        sa_info = _parse_sa_json(GOOGLE_SERVICE_ACCOUNT_JSON)
+        if not sa_info:
+            return None
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info,
+            scopes=["https://www.googleapis.com/auth/drive.file"]
+        )
+        service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        _drive_service_cache = service
+        return service
+    except Exception as e:
+        print("Drive init error:", e)
+        return None
+
+def upload_to_drive(local_path, filename, mimetype="text/csv", folder_id=None):
+    service = get_drive_service()
+    if not service:
+        return None
+    meta = {"name": filename}
+    if folder_id:
+        meta["parents"] = [folder_id]
+    media = MediaFileUpload(local_path, mimetype=mimetype, resumable=False)
+    try:
+        file = service.files().create(body=meta, media_body=media, fields="id, webViewLink, webContentLink").execute()
+        return file
+    except Exception as e:
+        print("Drive upload error:", e)
+        return None
+
+
+@app.route("/status")
+def status():
+    # Quick health + config check
+    drive = bool(get_drive_service())
+    return {
+        "ok": True,
+        "drive_enabled": drive,
+        "drive_folder_id_set": bool(DRIVE_FOLDER_ID),
+        "data_dir": DATA_DIR,
+        "db_path": DB_PATH,
+    }
+
+
+# --- Optional FIT upload & summary (works with or without Drive) ---
+from flask import request, jsonify
+
+# Try to import fitparse for FIT decoding (optional)
+try:
+    from fitparse import FitFile
+except Exception:
+    FitFile = None
+
+def parse_fit_summary(local_path):
+    """
+    Minimal FIT summary:
+    - total time, total distance (if present)
+    - laps count + basic lap times
+    Returns dict. If fitparse not installed, returns {'parsed': False, 'reason': ...}
+    """
+    if FitFile is None:
+        return {"parsed": False, "reason": "fitparse not installed"}
+
+    try:
+        fitfile = FitFile(local_path)
+        fitfile.parse()
+
+        total_timer = None
+        total_dist = None
+        laps = []
+        # Attempt to read session + laps messages
+        for msg in fitfile.get_messages():
+            name = msg.name
+            fields = {f.name: f.value for f in msg}
+            if name == "session":
+                total_timer = fields.get("total_timer_time")
+                total_dist = fields.get("total_distance")
+            elif name == "lap":
+                laps.append({
+                    "lap_time": fields.get("total_timer_time"),
+                    "lap_dist": fields.get("total_distance"),
+                    "avg_hr": fields.get("avg_heart_rate"),
+                    "max_hr": fields.get("max_heart_rate"),
+                    "avg_power": fields.get("avg_power"),
+                    "max_power": fields.get("max_power"),
+                })
+        return {
+            "parsed": True,
+            "total_timer_s": total_timer,
+            "total_distance_m": total_dist,
+            "laps_count": len(laps),
+            "laps": laps[:20],
+        }
+    except Exception as e:
+        return {"parsed": False, "reason": str(e)}
+
+@app.route("/upload_fit", methods=["GET", "POST"])
+def upload_fit():
+    if request.method == "GET":
+        # Simple HTML form for manual upload
+        return (
+            "<h3>Upload FIT</h3>"
+            "<form method='POST' enctype='multipart/form-data'>"
+            "<input type='file' name='file' accept='.fit' required />"
+            "<button type='submit'>Send</button>"
+            "</form>"
+        )
+
+    # POST: receive file
+    f = request.files.get("file")
+    if not f or not f.filename.lower().endswith(".fit"):
+        return jsonify({"ok": False, "error": "Please provide a .fit file in 'file' field"}), 400
+
+    # Save locally (temporary ok even without Persistent Disk)
+    fname = f.filename
+    local_path = os.path.join(DATA_DIR, fname)
+    try:
+        f.save(local_path)
+    except Exception as e:
+        # fallback to /tmp if DATA_DIR not writable
+        local_path = os.path.join("/tmp", fname)
+        f.save(local_path)
+
+    # Upload to Google Drive if configured
+    drive_file = None
+    try:
+        if 'upload_to_drive' in globals() and callable(upload_to_drive) and DRIVE_FOLDER_ID:
+            drive_file = upload_to_drive(local_path, fname, "application/octet-stream", DRIVE_FOLDER_ID)
+    except Exception as _e:
+        print("Drive upload error:", _e)
+
+    # Optional: quick parse summary
+    summary = parse_fit_summary(local_path)
+
+    return jsonify({
+        "ok": True,
+        "saved_local": local_path,
+        "drive_file": drive_file if isinstance(drive_file, dict) else None,
+        "fit_summary": summary,
+        "hint": "If you want deeper analysis, I can run an interval detection on this file."
+    })
