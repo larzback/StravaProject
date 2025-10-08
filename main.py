@@ -1,7 +1,7 @@
 import os, time, datetime, math, requests
 import json, base64
 from collections import defaultdict
-from flask import Flask, request, redirect, session, url_for
+from flask import Flask, request, redirect, session, url_for, jsonify
 # --- Added for Strava webhook patch ---
 import sqlite3
 import csv
@@ -27,6 +27,10 @@ REDIRECT_URI = os.environ["STRAVA_REDIRECT_URI"]
 STRAVA_AUTH_URL = "https://www.strava.com/oauth/authorize"
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 STRAVA_API_BASE = "https://www.strava.com/api/v3"
+
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
+GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET")
+BASE_URL = os.environ.get("BASE_URL", "https://strava-project-lara.onrender.com").rstrip("/")
 
 
 # ----------------- Helpers -----------------
@@ -192,16 +196,35 @@ def home():
 
 @app.route("/privacy")
 def privacy():
-    return html_head("Privacy Policy") + """
+    return html_head("Privacy Policy") + f"""
     <div class="card">
       <h1 class="title">🔒 Privacy Policy</h1>
-      <p class="subtitle">This personal app uses the Strava API to display <b>only your own data</b> (activities, profile, performance).</p>
+      <p class="subtitle">This personal app uses the Strava and Google Drive APIs to automate training analysis and file storage.</p>
 
       <ul class="small">
-        <li>💾 <b>Data retrieved:</b> athlete profile, activities, performance fields.</li>
-        <li>🔐 <b>Storage:</b> no database — data lives only in memory for the duration of your session.</li>
-        <li>❌ <b>Deletion:</b> log out to immediately clear session data. No tokens or history are persisted.</li>
-        <li>📧 <b>Contact:</b> For any request, please email ldmc.meyer@gmail.com.</li>
+        <li>📥 <b>Data retrieved (Strava):</b> athlete profile, activity list, performance metrics (distance, time, elevation gain, power/HR/cadence when available), and detailed per-second <i>streams</i> via webhook. Laps are only read if you manually upload a <code>.fit</code> file.</li>
+
+        <li>💾 <b>Server-side storage:</b>
+          <ul>
+            <li>SQLite database <code>{DB_PATH}</code> — minimal tables:
+              <ul>
+                <li><code>users</code>: Strava tokens (access/refresh + expiry) per athlete.</li>
+                <li><code>meta</code>: Google OAuth credentials (refresh token) for Drive uploads.</li>
+              </ul>
+            </li>
+            <li>Local files stored under <code>{DATA_DIR}</code> (CSV / .fit) and/or uploaded to your personal Google Drive.</li>
+          </ul>
+        </li>
+
+        <li>🔐 <b>Security:</b> all API keys and secrets are injected via environment variables. Browser sessions are signed using <code>APP_SECRET_KEY</code>.</li>
+
+        <li>📤 <b>Data sharing:</b> no data is ever sold or shared with third parties. Files may be uploaded to your own Google Drive only if you explicitly authorize access (scope <code>drive.file</code>, limited to files created by this app).</li>
+
+        <li>⏳ <b>Retention:</b> tokens remain stored while automation is active. You can revoke access anytime from your Strava or Google account (“Third-party access”). Local files remain under <code>{DATA_DIR}</code> until manually deleted; Drive files remain in your selected folder.</li>
+
+        <li>❌ <b>Data deletion:</b> you can request deletion of all stored data (tokens and local files) by emailing <a class="a" href="mailto:ldmc.meyer@gmail.com">ldmc.meyer@gmail.com</a>. You can also log out to clear your browser session immediately.</li>
+
+        <li>🧾 <b>Scopes used:</b> Strava <code>read</code>, <code>activity:read</code>, <code>activity:read_all</code>; Google Drive <code>drive.file</code>.</li>
       </ul>
 
       <div class="links"><a class="a" href="/">← Back</a></div>
@@ -510,6 +533,91 @@ def stats_2025_shell():
 </script>
 """ + html_foot()
 
+# OAuth user flow (Drive)
+try:
+    from google_auth_oauthlib.flow import Flow
+    from google.oauth2.credentials import Credentials as UserCredentials
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload
+except Exception as _e:
+    Flow = UserCredentials = build = MediaFileUpload = None
+
+GOOGLE_OAUTH_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+OAUTH_REDIRECT_URI = f"{BASE_URL}/oauth2callback"
+
+def get_drive_service_user():
+    """Build a Drive client using the stored user refresh token (if present)."""
+    if not (UserCredentials and build):
+        return None
+    token_json = meta_get("google_user_token_json")
+    if not token_json:
+        return None
+    try:
+        data = json.loads(token_json)
+        creds = UserCredentials.from_authorized_user_info(data, GOOGLE_OAUTH_SCOPES)
+        if not creds.valid and creds.refresh_token:
+            from google.auth.transport.requests import Request
+            creds.refresh(Request())
+            meta_set("google_user_token_json", creds.to_json())
+        return build("drive", "v3", credentials=creds, cache_discovery=False)
+    except Exception as e:
+        print("get_drive_service_user error:", e)
+        return None
+
+@app.route("/google_auth")
+def google_auth():
+    if not (GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET and Flow):
+        return "OAuth not configured", 400
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": GOOGLE_OAUTH_CLIENT_ID,
+                "client_secret": GOOGLE_OAUTH_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [OAUTH_REDIRECT_URI],
+            }
+        },
+        scopes=GOOGLE_OAUTH_SCOPES,
+    )
+    flow.redirect_uri = OAUTH_REDIRECT_URI
+    auth_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    meta_set("google_oauth_state", state)
+    return redirect(auth_url)
+
+@app.route("/oauth2callback")
+def oauth2callback():
+    if not Flow:
+        return "OAuth not configured", 400
+    state = meta_get("google_oauth_state")
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": GOOGLE_OAUTH_CLIENT_ID,
+                "client_secret": GOOGLE_OAUTH_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [OAUTH_REDIRECT_URI],
+            }
+        },
+        scopes=GOOGLE_OAUTH_SCOPES,
+        state=state,
+    )
+    flow.redirect_uri = OAUTH_REDIRECT_URI
+    try:
+        flow.fetch_token(authorization_response=request.url)
+    except Exception as e:
+        return f"OAuth error: {e}", 400
+    creds = flow.credentials
+    # Sauvegarde complète (inclut refresh_token)
+    meta_set("google_user_token_json", creds.to_json())
+    return "Google Drive connected ✅ You can close this tab."
+
+
 
 
 # ----------------- Run (optional for local dev) -----------------
@@ -520,7 +628,6 @@ if __name__ == "__main__":
 
 # --- Added env for webhook patch ---
 STRAVA_VERIFY_TOKEN = os.environ.get("STRAVA_VERIFY_TOKEN", "dev-verify-token")
-BASE_URL = os.environ.get("BASE_URL")  # optional; inferred if absent
 DB_PATH = os.environ.get("DB_PATH", "strava.db")
 DATA_DIR = os.environ.get("DATA_DIR", "data")
 if not os.path.isdir(DATA_DIR):
@@ -531,6 +638,7 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
 
 def init_db():
     with get_db() as conn:
@@ -579,6 +687,32 @@ def save_user_token(athlete_dict, token_dict):
         )
         conn.commit()
 
+#meta table
+def ensure_meta_table():
+    with get_db() as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS meta (
+            k TEXT PRIMARY KEY,
+            v TEXT
+        );""")
+        conn.commit()
+try:
+    ensure_meta_table()
+except Exception as _e:
+    print("meta table warn:", _e)
+
+def meta_get(key, default=None):
+    with get_db() as conn:
+        cur = conn.execute("SELECT v FROM meta WHERE k=?", (key,))
+        row = cur.fetchone()
+    return row["v"] if row else default
+
+def meta_set(key, value):
+    with get_db() as conn:
+        conn.execute("""INSERT INTO meta(k, v) VALUES(?,?)
+                        ON CONFLICT(k) DO UPDATE SET v=excluded.v""", (key, value))
+        conn.commit()
+
+#other
 def get_user(athlete_id: int):
     with get_db() as conn:
         cur = conn.execute("SELECT * FROM users WHERE athlete_id=?", (athlete_id,))
@@ -758,28 +892,63 @@ def get_drive_service():
         return None
 
 def upload_to_drive(local_path, filename, mimetype="text/csv", folder_id=None):
-    service = get_drive_service()
-    if not service:
-        return None
-    meta = {"name": filename}
-    if folder_id:
-        meta["parents"] = [folder_id]
-    media = MediaFileUpload(local_path, mimetype=mimetype, resumable=False)
-    try:
-        file = service.files().create(body=meta, media_body=media, fields="id, webViewLink, webContentLink").execute()
-        return file
-    except Exception as e:
-        print("Drive upload error:", e)
-        return None
+    """
+    Try user OAuth first (Drive perso), fallback to Service Account if available.
+    """
+    # 1) User OAuth
+    svc = get_drive_service_user()
+    if svc:
+        meta = {"name": filename}
+        if folder_id:
+            meta["parents"] = [folder_id]
+        media = MediaFileUpload(local_path, mimetype=mimetype, resumable=False)
+        try:
+            file = svc.files().create(
+                body=meta,
+                media_body=media,
+                fields="id, webViewLink, webContentLink, parents",
+            ).execute()
+            return file
+        except Exception as e:
+            print("Drive user upload error:", e)
 
+    # 2) Fallback Service Account si tu gardes ce mode
+    try:
+        from google.oauth2 import service_account
+        sa_ok = True
+    except Exception:
+        sa_ok = False
+
+    if sa_ok and 'get_drive_service' in globals():
+        svc_sa = get_drive_service()
+        if svc_sa:
+            meta = {"name": filename}
+            if folder_id:
+                meta["parents"] = [folder_id]
+            media = MediaFileUpload(local_path, mimetype=mimetype, resumable=False)
+            try:
+                file = svc_sa.files().create(
+                    body=meta,
+                    media_body=media,
+                    fields="id, webViewLink, webContentLink, parents",
+                    # supportsAllDrives=True,  # active si Drive partagé
+                ).execute()
+                return file
+            except Exception as e:
+                print("Drive SA upload error:", e)
+
+    return None
 
 @app.route("/status")
 def status():
-    # Quick health + config check
-    drive = bool(get_drive_service())
+    drive = bool(get_drive_service_user() or get_drive_service())
+    user_oauth = bool(get_drive_service_user())
+    sa_enabled = bool(get_drive_service())
     return {
         "ok": True,
         "drive_enabled": drive,
+        "drive_user_oauth": user_oauth,
+        "drive_service_account": sa_enabled,
         "drive_folder_id_set": bool(DRIVE_FOLDER_ID),
         "data_dir": DATA_DIR,
         "db_path": DB_PATH,
