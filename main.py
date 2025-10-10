@@ -883,6 +883,8 @@ def save_streams_csv(athlete_id, activity_id, streams_json):
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
     if request.method == "GET":
+        print("[WEBHOOK VERIFY] args:", dict(request.args))
+        print("[WEBHOOK VERIFY] token matches:", request.args.get("hub.verify_token") == STRAVA_VERIFY_TOKEN)
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
@@ -918,18 +920,23 @@ def webhook():
 
 @app.route("/admin/create_subscription")
 def create_subscription():
-    base = get_base_url()
+    base = request.args.get("base") or get_base_url()
+    callback_override = request.args.get("callback")  # optional
+    verify_override = request.args.get("verify")      # optional
+
+    callback_url = (callback_override or f"{base}/webhook").rstrip("/")
     payload = {
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
-        "callback_url": f"{base}/webhook",
-        "verify_token": STRAVA_VERIFY_TOKEN,
+        "callback_url": callback_url,
+        "verify_token": (verify_override or STRAVA_VERIFY_TOKEN),
     }
+
     r = requests.post(f"{STRAVA_API_BASE}/push_subscriptions", data=payload, timeout=20)
     try:
-        return r.json()
+        return {"status": r.status_code, "payload": {"callback_url": callback_url}, **r.json()}
     except Exception:
-        return {"status": r.status_code, "text": r.text[:2000]}
+        return {"status": r.status_code, "payload": {"callback_url": callback_url}, "text": r.text[:2000]}
 
 # --- Google Drive ENV ---
 # If you *don't* have a Persistent Disk, enable Drive uploads:
