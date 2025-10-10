@@ -32,7 +32,83 @@ GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
 GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET")
 BASE_URL = os.environ.get("BASE_URL", "https://strava-project-lara.onrender.com").rstrip("/")
 
+#debug
+# ===== DEBUG PATCH (safe to add/remove) =====
+from functools import wraps
 
+def _mask(s, keep=4):
+    try:
+        s = str(s or "")
+        if len(s) <= keep*2: 
+            return "*" * len(s)
+        return s[:keep] + "*"*(len(s)-keep*2) + s[-keep:]
+    except Exception:
+        return "?"
+
+@app.route("/oauth_status")
+def oauth_status():
+    """Quick visibility into config used by Google/Strava debug."""
+    # IMPORTANT: do not print secrets; just booleans and derived values
+    try:
+        base = BASE_URL.rstrip("/") if BASE_URL else None
+    except NameError:
+        base = None
+    derived_redirect = f"{base}/oauth2callback" if base else None
+    try:
+        flow_ok = Flow is not None
+    except NameError:
+        flow_ok = False
+
+    return {
+        # Google bits
+        "GOOGLE_OAUTH_CLIENT_ID_set": bool(GOOGLE_OAUTH_CLIENT_ID),
+        "GOOGLE_OAUTH_CLIENT_SECRET_set": bool(GOOGLE_OAUTH_CLIENT_SECRET),
+        "Flow_imported": flow_ok,
+        "BASE_URL": base,
+        "OAUTH_REDIRECT_URI": derived_redirect,
+        # Strava bits
+        "STRAVA_CLIENT_ID_set": bool(CLIENT_ID),
+        "STRAVA_CLIENT_SECRET_set": bool(CLIENT_SECRET),
+        "STRAVA_VERIFY_TOKEN_set": bool(STRAVA_VERIFY_TOKEN),
+        "WEBHOOK_CALLBACK_URL": f"{base}/webhook" if base else None,
+    }
+
+@app.route("/admin/diag")
+def admin_diag():
+    """Show the exact payload that /admin/create_subscription will send (without secrets)."""
+    base = BASE_URL.rstrip("/") if BASE_URL else ""
+    callback_url = f"{base}/webhook" if base else None
+    payload = {
+        "client_id_present": bool(CLIENT_ID),
+        "client_secret_present": bool(CLIENT_SECRET),
+        "verify_token_present": bool(STRAVA_VERIFY_TOKEN),
+        "callback_url": callback_url,
+        "base_url": base,
+    }
+    return payload
+
+@app.route("/admin/ping_webhook")
+def admin_ping_webhook():
+    """
+    Simulate Strava verification call (GET) against your own /webhook.
+    Use: /admin/ping_webhook?token=YOUR_VERIFY_TOKEN&challenge=abc123
+    """
+    token = request.args.get("token")
+    challenge = request.args.get("challenge", "debug123")
+    # Reuse the same logic as /webhook GET
+    ok = (token == STRAVA_VERIFY_TOKEN)
+    return {
+        "sent_token": token,
+        "matches_env": ok,
+        "expected_env_token_set": bool(STRAVA_VERIFY_TOKEN),
+        "challenge": challenge,
+        "what_webhook_should_return": {"hub.challenge": challenge} if ok else {"error": "Verification failed"},
+    }
+
+# (Optional) add some logging in the real /webhook GET without changing behavior
+# Find your existing /webhook route and inside the GET branch add:
+#   print("[WEBHOOK DEBUG] args:", dict(request.args), "token_matches:", request.args.get("hub.verify_token")==STRAVA_VERIFY_TOKEN)
+# ===== END DEBUG PATCH =====
 # ----------------- Helpers -----------------
 def unix(dt):  # datetime -> epoch seconds
     return int(time.mktime(dt.timetuple()))
@@ -566,25 +642,31 @@ def get_drive_service_user():
 
 @app.route("/google_auth")
 def google_auth():
+    # Sanity check des envs + import
     if not (GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET and Flow):
         return "OAuth not configured", 400
+
+    # Utiliser l’endpoint v2 + booleans natifs
     flow = Flow.from_client_config(
         {
             "web": {
                 "client_id": GOOGLE_OAUTH_CLIENT_ID,
                 "client_secret": GOOGLE_OAUTH_CLIENT_SECRET,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
                 "redirect_uris": [OAUTH_REDIRECT_URI],
+                # origins not mandatory here; set them in GCP console
             }
         },
         scopes=GOOGLE_OAUTH_SCOPES,
     )
     flow.redirect_uri = OAUTH_REDIRECT_URI
+
+    # include_granted_scopes doit être un booléen, pas "true" string
     auth_url, state = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="consent",
+        access_type="offline",          # nécessaire pour refresh_token
+        include_granted_scopes=True,    # bool, pas string
+        prompt="consent"                # force un refresh_token
     )
     meta_set("google_oauth_state", state)
     return redirect(auth_url)
